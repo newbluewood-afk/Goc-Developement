@@ -19,15 +19,51 @@
 const path = require('path');
 const fs = require('fs');
 
-const {
-  makeAssistantTurn,
-  makeFallbackAssistantTurn,
-} = require('./assistantTurnSchema');
+const { makeAssistantTurn } = require('./assistantTurnSchema');
 const { searchInCollection } = require('./vectorSearchService');
 const { recordSpend } = require('./aiBudgetService');
 
 const DOCS_DIR = path.join(__dirname, '../docs');
 const SITE_KB_COLLECTION = 'site_kb';
+
+/**
+ * "What is today's date?" is not site KB; keyword fallback wrongly matches "dan" in "7 dana…".
+ * Handle explicitly (works even when AI_PROVIDER=mock).
+ */
+function isTodaysDateQuestion(raw) {
+  const m = String(raw || '').toLowerCase();
+  const c = String(raw || '');
+  if (/\bwhat\s+('?s\s+)?today'?s?\s+(date|day)\b/i.test(m)) return true;
+  if (/\bwhat\s+day\b.*\btoday\b/i.test(m)) return true;
+  if (/koji\s+je\s+danas\s+(dan|datum)/i.test(m)) return true;
+  if (/koja\s+je\s+danas\s+(dan|datum)/i.test(m)) return true;
+  if (m.includes('danas') && (m.includes('datum') || /\bdan\b/.test(m))) return true;
+  if (/данас/.test(c) && (/датум|дан/.test(c) || /који|која/.test(c))) return true;
+  return false;
+}
+
+function makeTodaysDateTurnIfAsked(message, lang) {
+  if (!isTodaysDateQuestion(message)) return null;
+  const locale = lang === 'en' ? 'en-GB' : 'sr-Cyrl-RS';
+  const long = new Date().toLocaleDateString(locale, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  const answer =
+    lang === 'en'
+      ? `Today is ${long} (server time).`
+      : `Данас је ${long} (време сервера).`;
+  return makeAssistantTurn({
+    answer,
+    intent: 'unknown',
+    confidence: 1,
+    suggestions: [],
+    sources: [],
+    meta: { source: 'server_clock', note: 'not_site_kb' },
+  });
+}
 
 function clamp01(n) {
   const v = Number(n);
@@ -39,6 +75,61 @@ function clamp01(n) {
 
 function safeString(v) {
   return typeof v === 'string' ? v : '';
+}
+
+function defaultNavigateSuggestions(lang) {
+  if (lang === 'en') {
+    return [
+      { label: 'Accommodation', route: '/smestaj', type: 'navigate' },
+      { label: 'News', route: '/vesti', type: 'navigate' },
+      { label: 'Contact', route: '/kontakt', type: 'navigate' }
+    ];
+  }
+  return [
+    { label: 'Smeštaj', route: '/smestaj', type: 'navigate' },
+    { label: 'Vesti', route: '/vesti', type: 'navigate' },
+    { label: 'Kontakt', route: '/kontakt', type: 'navigate' }
+  ];
+}
+
+/** When keyword KB has no token hits (e.g. "hi"); calm copy vs outage wording. */
+function makeNoKeywordMatchTurn(lang, reason) {
+  const isEn = lang === 'en';
+  let answer;
+  switch (reason) {
+    case 'ai_disabled_or_mock':
+      answer = isEn
+        ? 'Live AI is off on the server, so I only match from this short list. Pick a page or ask with a longer phrase (e.g. “accommodation”, “news”).'
+        : 'Живи AI је искључен на серверу, па овде радим само кратко упоређивање са листом испод. Изаберите страницу или пошаљите дуже питање (нпр. „смештај“, „вести“, „контакт“).';
+      break;
+    case 'vector_search_failed':
+      answer = isEn
+        ? 'Knowledge search is temporarily unavailable. Use the links below.'
+        : 'Претрага упутства тренутно није доступна. Користите везе испод.';
+      break;
+    case 'no_vector_hits':
+      answer = isEn
+        ? 'I did not find a close match in the guide. Rephrase or choose a topic below.'
+        : 'Нисам пронашао близак погодак у упутству. Покушајте другачије питање или изаберите тему испод.';
+      break;
+    case 'llm_call_failed':
+      answer = isEn
+        ? 'I pulled relevant pages but could not generate a short answer. Open a suggestion below.'
+        : 'Имам релевантне странице, али кратак текст тренутно не могу да направим. Отворите предлог испод.';
+      break;
+    default:
+      answer = isEn
+        ? 'Please send a slightly longer question (e.g. “accommodation”, “news”, “login”) or tap a page below.'
+        : 'Пошаљите мало дуже питање (нпр. „смештај“, „вести“, „пријава“) или изаберите страницу испод.';
+  }
+  return makeAssistantTurn({
+    answer,
+    intent: 'site_guide',
+    confidence: 0.12,
+    suggestions: defaultNavigateSuggestions(lang),
+    sources: [],
+    meta: { reason, fallback: 'no_keyword_match' }
+  });
 }
 
 /**
@@ -69,8 +160,8 @@ function extractSuggestionsFromHits(hits, lang) {
 
 /**
  * Build a no-LLM "keyword fallback" AssistantTurn from the static KB JSON
- * files. Used whenever the full RAG path is unavailable. Returns a generic
- * fallback (via `makeFallbackAssistantTurn`) if nothing in the KB matches.
+ * files. Used whenever the full RAG path is unavailable. If nothing matches,
+ * returns contextual copy with quick links (not outage-style wording).
  *
  * @param {string} message  User's raw question.
  * @param {'sr'|'en'} lang
@@ -125,8 +216,7 @@ async function makeKeywordFallbackTurn(message, lang, reason) {
     .slice(0, 3);
 
   if (scored.length === 0) {
-    const generic = makeFallbackAssistantTurn({ lang, reason });
-    return { ...generic, meta: { reason, fallback: 'generic' } };
+    return makeNoKeywordMatchTurn(lang, reason);
   }
 
   const answerLines = [];
@@ -288,6 +378,9 @@ async function composeSiteGuideTurn({
 }) {
   const safeLang = lang === 'en' ? 'en' : 'sr';
   const safeMessage = String(message || '');
+
+  const dateTurn = makeTodaysDateTurnIfAsked(safeMessage, safeLang);
+  if (dateTurn) return dateTurn;
 
   // 1. Short-circuit when AI is disabled or in mock mode.
   const provider = process.env.AI_PROVIDER || 'mock';

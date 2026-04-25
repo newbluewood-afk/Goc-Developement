@@ -1,4 +1,12 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000';
+// Dev + no explicit base: use same origin so Vite `server.proxy` can forward /api (avoids CORS).
+// Production / LAN testing: set VITE_API_BASE_URL (e.g. Netlify → Render URL).
+const _viteBase = import.meta.env.VITE_API_BASE_URL;
+const BASE_URL =
+  _viteBase !== undefined && String(_viteBase).trim() !== ''
+    ? String(_viteBase).trim()
+    : import.meta.env.DEV
+      ? ''
+      : 'http://127.0.0.1:3000';
 
 class ApiService {
   constructor() {

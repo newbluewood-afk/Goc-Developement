@@ -62,9 +62,12 @@ function buildGuideDevHud(meta) {
     const r = meta.reason ? ` · ${meta.reason}` : ''
     return `dev · fallback=${meta.fallback}${r}`
   }
+  if (meta.source === 'server_clock') {
+    return 'dev · server_date (no LLM / no site_kb)'
+  }
   const bits = ['dev · RAG']
   if (meta.model) bits.push(String(meta.model))
-  if (meta.hits != null) bits.push(`${meta.hits} vec hits`)
+  if (meta.hits != null) bits.push(`${meta.hits} hits`)
   if (meta.tokensIn != null || meta.tokensOut != null) {
     bits.push(`tokens ${meta.tokensIn ?? '?'}/${meta.tokensOut ?? '?'}`)
   }
@@ -142,12 +145,16 @@ async function sendGuideMessage() {
       guideDevHud: showGuideDevHud ? buildGuideDevHud(result?.meta) : null,
       ts: Date.now()
     })
-  } catch (_err) {
+  } catch (err) {
+    const devDetail =
+      showGuideDevHud && err
+        ? `dev · ${err.message || 'request failed'}${err.status ? ` (HTTP ${err.status})` : ''}`
+        : null
     guideMessages.value.push({
       role: 'assistant',
       text: t('assistant.guideError'),
       suggestions: [],
-      guideDevHud: showGuideDevHud ? 'dev · request failed (network or HTTP)' : null,
+      guideDevHud: devDetail,
       ts: Date.now()
     })
   } finally {
@@ -1332,6 +1339,18 @@ function goToLogin() {
   font-size: 0.84rem;
   color: #332317;
   white-space: pre-line;
+  word-break: break-word;
+}
+
+.assistant-guide-dev-hud {
+  margin: 6px 0 0;
+  padding: 4px 6px;
+  font-size: 0.65rem;
+  line-height: 1.35;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: #5c4a3d;
+  background: rgba(205, 172, 145, 0.25);
+  border: 1px dashed #cdac91;
   word-break: break-word;
 }
 

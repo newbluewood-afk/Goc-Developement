@@ -15,11 +15,14 @@ import ResetPasswordView from '../views/ResetPasswordView.vue'
 import AdminGuestsView from '../views/AdminGuestsView.vue'
 import AdminRoomMapView from '../views/AdminRoomMapView.vue'
 import AdminAiUsageView from '../views/AdminAiUsageView.vue'
+import LandingMarketingView from '../views/LandingMarketingView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', name: 'home', component: HomeView },
+    /** Demo marketing layout (FigJam-inspired); `noindex` set in view. Home stays at `/`. */
+    { path: '/landing', name: 'marketing-landing', component: LandingMarketingView },
     { path: '/smestaj', name: 'smestaj', component: SmestajView },
     { path: '/smestaj/:id', name: 'smestaj-single', component: SmestajSingleView },
     { path: '/vesti', name: 'vesti', component: VestiView },

@@ -23,14 +23,43 @@ const app = express();
 console.log('Express app created');
 
 // CORS configuration
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174'];
+// Include 127.0.0.1 — browsers treat it as a different origin than "localhost".
+const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(',') || [
+  'http://localhost:3001',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174'
+]).map((s) => s.trim()).filter(Boolean);
+
+function isLocalMachineOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const u = new URL(origin);
+    const h = u.hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+  } catch {
+    return false;
+  }
+}
+
+/** Non-production: allow any http(s) origin on localhost / 127.0.0.1 / ::1 (any port). */
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (process.env.NODE_ENV !== 'production' && isLocalMachineOrigin(origin)) return true;
+  return false;
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
     console.log('Blocked CORS origin:', origin);
-    callback(new Error('Not allowed by CORS'));
+    // Never pass Error here — the cors package surfaces it as HTTP 500.
+    callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE'],
@@ -41,7 +70,7 @@ app.use(cors(corsOptions));
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
+  if (origin && isOriginAllowed(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
@@ -53,7 +82,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
     const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
+    if (origin && isOriginAllowed(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Access-Control-Allow-Credentials', 'true');
       res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
