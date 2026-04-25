@@ -19,10 +19,16 @@ function makeFakeDb(initialRows = []) {
       // SELECT single eur_spent row (FOR UPDATE in assertBudget).
       if (sql.includes('SELECT eur_spent FROM ai_budget_monthly')) {
         const [mk, uk, f] = params;
-        const r = rows.find(
+        if (sql.includes('feature<>')) {
+          const filtered = rows.filter(
+            (x) => x.month_key === mk && x.user_key === uk && x.feature !== f
+          );
+          return [filtered.map((r) => ({ eur_spent: r.eur_spent })), []];
+        }
+        const filtered = rows.filter(
           (x) => x.month_key === mk && x.user_key === uk && x.feature === f
         );
-        return [r ? [{ eur_spent: r.eur_spent }] : [], []];
+        return [filtered.map((r) => ({ eur_spent: r.eur_spent })), []];
       }
       // Aggregate SUM(eur_spent)+SUM(request_count) over one user_key (snapshot).
       if (
@@ -75,27 +81,30 @@ function makeFakeDb(initialRows = []) {
       // INSERT ... ON DUPLICATE KEY UPDATE.
       if (sql.includes('INSERT INTO ai_budget_monthly')) {
         const [mk, uk, f, ti, to_, eur] = params;
+        const isNoop = ti === undefined || to_ === undefined || eur === undefined;
         const existing = rows.find(
           (r) => r.month_key === mk && r.user_key === uk && r.feature === f
         );
         if (existing) {
-          existing.tokens_input =
-            Number(existing.tokens_input || 0) + Number(ti);
-          existing.tokens_output =
-            Number(existing.tokens_output || 0) + Number(to_);
-          existing.eur_spent =
-            Number(existing.eur_spent || 0) + Number(eur);
-          existing.request_count =
-            Number(existing.request_count || 0) + 1;
+          if (!isNoop) {
+            existing.tokens_input =
+              Number(existing.tokens_input || 0) + Number(ti);
+            existing.tokens_output =
+              Number(existing.tokens_output || 0) + Number(to_);
+            existing.eur_spent =
+              Number(existing.eur_spent || 0) + Number(eur);
+            existing.request_count =
+              Number(existing.request_count || 0) + 1;
+          }
         } else {
           rows.push({
             month_key: mk,
             user_key: uk,
             feature: f,
-            tokens_input: Number(ti),
-            tokens_output: Number(to_),
-            eur_spent: Number(eur),
-            request_count: 1,
+            tokens_input: Number(isNoop ? 0 : ti),
+            tokens_output: Number(isNoop ? 0 : to_),
+            eur_spent: Number(isNoop ? 0 : eur),
+            request_count: Number(isNoop ? 0 : 1),
           });
         }
         return [{ affectedRows: 1 }, []];
@@ -207,6 +216,39 @@ describe('assertBudget', () => {
     expect(caught).toBeInstanceOf(BudgetExceededError);
     expect(caught.code).toBe('BUDGET_EXCEEDED_GLOBAL');
   });
+
+  it('global cap sums across all features (not only current feature)', async () => {
+    process.env.AI_USER_MONTHLY_BUDGET_EUR = '2';
+    process.env.AI_MONTHLY_BUDGET_EUR = '1';
+    const mk = currentMonthKey();
+    const fakeDb = makeFakeDb([
+      {
+        month_key: mk,
+        user_key: '__global__',
+        feature: 'site_guide',
+        eur_spent: 0.7,
+        request_count: 2,
+        tokens_input: 1,
+        tokens_output: 1,
+      },
+      {
+        month_key: mk,
+        user_key: '__global__',
+        feature: 'chat_assistant',
+        eur_spent: 0.4,
+        request_count: 1,
+        tokens_input: 1,
+        tokens_output: 1,
+      },
+    ]);
+    jest.doMock('../../db', () => fakeDb);
+
+    const { assertBudget, BudgetExceededError } = require('../../services/aiBudgetService');
+
+    await expect(
+      assertBudget({ userKey: 'guest:1', feature: 'site_guide' })
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+  });
 });
 
 describe('recordSpend', () => {
@@ -228,15 +270,18 @@ describe('recordSpend', () => {
     expect(out).toHaveProperty('totalEurThisMonth');
     expect(out.eurDelta).toBeGreaterThan(0);
 
-    expect(fakeDb._rows.length).toBe(2);
+    expect(fakeDb._rows.length).toBe(3);
     const mk = currentMonthKey();
-    for (const r of fakeDb._rows) {
+    for (const r of fakeDb._rows.filter((r) => r.feature !== '__global_lock__')) {
       expect(r.month_key).toBe(mk);
       expect(r.feature).toBe('site_guide');
       expect(r.request_count).toBe(1);
       expect(r.eur_spent).toBeGreaterThan(0);
     }
-    const keys = fakeDb._rows.map((r) => r.user_key).sort();
+    const keys = fakeDb._rows
+      .filter((r) => r.feature !== '__global_lock__')
+      .map((r) => r.user_key)
+      .sort();
     expect(keys).toEqual(['__global__', 'guest:1']);
   });
 
@@ -274,11 +319,46 @@ describe('recordSpend', () => {
       tokensOut: 500,
     });
 
-    expect(fakeDb._rows.length).toBe(2);
-    for (const r of fakeDb._rows) {
+    expect(fakeDb._rows.length).toBe(3);
+    for (const r of fakeDb._rows.filter((r) => r.feature !== '__global_lock__')) {
       expect(r.request_count).toBe(3);
       expect(r.eur_spent).toBeGreaterThan(0.01);
     }
+  });
+
+  it('throws BUDGET_EXCEEDED_GLOBAL before writing when record would exceed cap', async () => {
+    process.env.AI_USER_MONTHLY_BUDGET_EUR = '2';
+    process.env.AI_MONTHLY_BUDGET_EUR = '0.0001';
+    const mk = currentMonthKey();
+    const fakeDb = makeFakeDb([
+      {
+        month_key: mk,
+        user_key: '__global__',
+        feature: 'site_guide',
+        eur_spent: 0.00009,
+        request_count: 1,
+        tokens_input: 1,
+        tokens_output: 1,
+      },
+    ]);
+    jest.doMock('../../db', () => fakeDb);
+
+    const { recordSpend, BudgetExceededError } = require('../../services/aiBudgetService');
+
+    let caught;
+    try {
+      await recordSpend({
+        userKey: 'guest:1',
+        feature: 'site_guide',
+        model: 'claude-sonnet-4-6',
+        tokensIn: 1000,
+        tokensOut: 500,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(BudgetExceededError);
+    expect(caught.code).toBe('BUDGET_EXCEEDED_GLOBAL');
   });
 });
 

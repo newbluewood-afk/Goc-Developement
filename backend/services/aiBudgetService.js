@@ -15,6 +15,7 @@ const db = require('../db');
 const aiPricing = require('../config/aiPricing');
 
 const GLOBAL_USER_KEY = '__global__';
+const GLOBAL_LOCK_FEATURE = '__global_lock__';
 
 function toPositiveFloat(v, fallback) {
   const n = parseFloat(v);
@@ -56,17 +57,33 @@ async function assertBudget({ userKey, feature }) {
     await conn.beginTransaction();
     const monthKey = currentMonthKey();
 
+    // Serialize global-cap checks across features to reduce check/update drift.
+    await conn.query(
+      `INSERT INTO ai_budget_monthly
+        (month_key, user_key, feature, tokens_input, tokens_output, eur_spent, request_count)
+       VALUES (?, ?, ?, 0, 0, 0, 0)
+       ON DUPLICATE KEY UPDATE month_key = VALUES(month_key)`,
+      [monthKey, GLOBAL_USER_KEY, GLOBAL_LOCK_FEATURE]
+    );
+    await conn.query(
+      'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature=? FOR UPDATE',
+      [monthKey, GLOBAL_USER_KEY, GLOBAL_LOCK_FEATURE]
+    );
+
     const [userRows] = await conn.query(
       'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature=? FOR UPDATE',
       [monthKey, userKey, feature]
     );
     const [globalRows] = await conn.query(
-      'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature=? FOR UPDATE',
-      [monthKey, GLOBAL_USER_KEY, feature]
+      'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature<>? FOR UPDATE',
+      [monthKey, GLOBAL_USER_KEY, GLOBAL_LOCK_FEATURE]
     );
 
     const userEur = userRows[0] && userRows[0].eur_spent != null ? Number(userRows[0].eur_spent) : 0;
-    const globalEur = globalRows[0] && globalRows[0].eur_spent != null ? Number(globalRows[0].eur_spent) : 0;
+    const globalEur = globalRows.reduce(
+      (sum, r) => sum + Number(r.eur_spent || 0),
+      0
+    );
 
     if (globalEur >= CAP_GLOBAL_EUR) {
       throw new BudgetExceededError('Global AI monthly budget exceeded', {
@@ -117,6 +134,58 @@ async function recordSpend({ userKey, feature, model, tokensIn, tokensOut }) {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+    // Global lock row: serializes spending updates across features.
+    await conn.query(
+      `INSERT INTO ai_budget_monthly
+        (month_key, user_key, feature, tokens_input, tokens_output, eur_spent, request_count)
+       VALUES (?, ?, ?, 0, 0, 0, 0)
+       ON DUPLICATE KEY UPDATE month_key = VALUES(month_key)`,
+      [monthKey, GLOBAL_USER_KEY, GLOBAL_LOCK_FEATURE]
+    );
+    await conn.query(
+      'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature=? FOR UPDATE',
+      [monthKey, GLOBAL_USER_KEY, GLOBAL_LOCK_FEATURE]
+    );
+    // Ensure user row exists before FOR UPDATE lock.
+    await conn.query(
+      `INSERT INTO ai_budget_monthly
+        (month_key, user_key, feature, tokens_input, tokens_output, eur_spent, request_count)
+       VALUES (?, ?, ?, 0, 0, 0, 0)
+       ON DUPLICATE KEY UPDATE month_key = VALUES(month_key)`,
+      [monthKey, userKey, feature]
+    );
+    const [userRows] = await conn.query(
+      'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature=? FOR UPDATE',
+      [monthKey, userKey, feature]
+    );
+    const [globalRows] = await conn.query(
+      'SELECT eur_spent FROM ai_budget_monthly WHERE month_key=? AND user_key=? AND feature<>? FOR UPDATE',
+      [monthKey, GLOBAL_USER_KEY, GLOBAL_LOCK_FEATURE]
+    );
+    const userEur = userRows[0] && userRows[0].eur_spent != null ? Number(userRows[0].eur_spent) : 0;
+    const globalEur = globalRows.reduce(
+      (sum, r) => sum + Number(r.eur_spent || 0),
+      0
+    );
+    if (globalEur + eurDelta > CAP_GLOBAL_EUR) {
+      throw new BudgetExceededError('Global AI monthly budget exceeded', {
+        code: 'BUDGET_EXCEEDED_GLOBAL',
+        userKey,
+        feature,
+        limitEur: CAP_GLOBAL_EUR,
+        spentEur: globalEur
+      });
+    }
+    if (userEur + eurDelta > CAP_USER_EUR) {
+      throw new BudgetExceededError('User AI monthly budget exceeded', {
+        code: 'BUDGET_EXCEEDED_USER',
+        userKey,
+        feature,
+        limitEur: CAP_USER_EUR,
+        spentEur: userEur
+      });
+    }
+
     const sql = `INSERT INTO ai_budget_monthly
       (month_key, user_key, feature, tokens_input, tokens_output, eur_spent, request_count)
       VALUES (?, ?, ?, ?, ?, ?, 1)
