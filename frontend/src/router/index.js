@@ -14,11 +14,15 @@ import GuestDashboardView from '../views/GuestDashboardView.vue'
 import ResetPasswordView from '../views/ResetPasswordView.vue'
 import AdminGuestsView from '../views/AdminGuestsView.vue'
 import AdminRoomMapView from '../views/AdminRoomMapView.vue'
+import AdminAiUsageView from '../views/AdminAiUsageView.vue'
+import LandingMarketingView from '../views/LandingMarketingView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', name: 'home', component: HomeView },
+    /** Demo marketing layout (FigJam-inspired); `noindex` set in view. Home stays at `/`. */
+    { path: '/landing', name: 'marketing-landing', component: LandingMarketingView },
     { path: '/smestaj', name: 'smestaj', component: SmestajView },
     { path: '/smestaj/:id', name: 'smestaj-single', component: SmestajSingleView },
     { path: '/vesti', name: 'vesti', component: VestiView },
@@ -28,6 +32,7 @@ const router = createRouter({
     { path: '/admin/rezervacije', name: 'admin-reservations', component: AdminReservationsView, meta: { requiresAuth: true } },
     { path: '/admin/gosti', name: 'admin-guests', component: AdminGuestsView, meta: { requiresAuth: true } },
     { path: '/admin/mapa-soba', name: 'admin-room-map', component: AdminRoomMapView, meta: { requiresAuth: true } },
+    { path: '/admin/ai', name: 'admin-ai', component: AdminAiUsageView, meta: { requiresAuth: true } },
     { path: '/cancel/:token', name: 'cancel', component: CancelView },
     { path: '/prijava', name: 'prijava', component: GuestLoginView },
     { path: '/moj-nalog', name: 'moj-nalog', component: GuestDashboardView, meta: { requiresGuestAuth: true } },
