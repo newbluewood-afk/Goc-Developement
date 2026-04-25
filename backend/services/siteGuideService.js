@@ -27,18 +27,42 @@ const DOCS_DIR = path.join(__dirname, '../docs');
 const SITE_KB_COLLECTION = 'site_kb';
 
 /**
+ * Strip BOM / ZW* so regexes match pasted chat text from mobile/desktop clients.
+ * @param {string} raw
+ */
+function normalizeUserQuestion(raw) {
+  return String(raw || '')
+    .normalize('NFC')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim();
+}
+
+/**
  * "What is today's date?" is not site KB; keyword fallback wrongly matches "dan" in "7 dana…".
  * Handle explicitly (works even when AI_PROVIDER=mock).
  */
 function isTodaysDateQuestion(raw) {
-  const m = String(raw || '').toLowerCase();
-  const c = String(raw || '');
+  const c = normalizeUserQuestion(raw);
+  const m = c.toLowerCase();
   if (/\bwhat\s+('?s\s+)?today'?s?\s+(date|day)\b/i.test(m)) return true;
   if (/\bwhat\s+day\b.*\btoday\b/i.test(m)) return true;
-  if (/koji\s+je\s+danas\s+(dan|datum)/i.test(m)) return true;
-  if (/koja\s+je\s+danas\s+(dan|datum)/i.test(m)) return true;
+  // Latin: fixed order and common reorderings
+  if (/koji\s+je\s+danas\s+(dan|datum)\b/i.test(m)) return true;
+  if (/koja\s+je\s+danas\s+(dan|datum)\b/i.test(m)) return true;
+  if (/koji\s+je\s+dan\s+danas\b/i.test(m)) return true;
+  if (/koja\s+je\s+dan\s+danas\b/i.test(m)) return true;
+  if (/koji\s+danas\s+je\s+(dan|datum)\b/i.test(m)) return true;
+  if (/koja\s+danas\s+je\s+(dan|datum)\b/i.test(m)) return true;
+  if (/koji\s+(je\s+)?datum\s+(je\s+)?danas\b/i.test(m)) return true;
+  if (/koja\s+(je\s+)?datum\s+(je\s+)?danas\b/i.test(m)) return true;
   if (m.includes('danas') && (m.includes('datum') || /\bdan\b/.test(m))) return true;
-  if (/данас/.test(c) && (/датум|дан/.test(c) || /који|која/.test(c))) return true;
+  // Cyrillic (UI may be Cyrillic while user mixes scripts)
+  if (/који\s+је\s+данас\s+(дан|датум)\b/i.test(c)) return true;
+  if (/која\s+је\s+данас\s+(дан|датум)\b/i.test(c)) return true;
+  if (/који\s+је\s+дан\s+данас\b/i.test(c)) return true;
+  if (/која\s+је\s+дан\s+данас\b/i.test(c)) return true;
+  if (/који\s+је\s+данас\s+је\s+(дан|датум)/i.test(c)) return true;
+  if (/која\s+је\s+данас\s+је\s+(дан|датум)/i.test(c)) return true;
   return false;
 }
 
@@ -377,7 +401,7 @@ async function composeSiteGuideTurn({
   userKey = 'anon',
 }) {
   const safeLang = lang === 'en' ? 'en' : 'sr';
-  const safeMessage = String(message || '');
+  const safeMessage = normalizeUserQuestion(message);
 
   const dateTurn = makeTodaysDateTurnIfAsked(safeMessage, safeLang);
   if (dateTurn) return dateTurn;

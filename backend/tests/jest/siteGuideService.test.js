@@ -81,6 +81,24 @@ function setupMocks({ fetchMock, searchMock, recordSpendMock } = {}) {
 }
 
 describe('composeSiteGuideTurn - disabled / mock paths', () => {
+  it('returns server date before mock fallback when user asks koji je danas dan', async () => {
+    process.env.AI_PROVIDER = 'mock';
+    const { fetchFn, searchInCollection } = setupMocks();
+
+    const { composeSiteGuideTurn } = require('../../services/siteGuideService');
+    const result = await composeSiteGuideTurn({
+      message: 'koji je danas dan',
+      lang: 'sr',
+      userKey: 'anon',
+    });
+
+    expect(() => validateAssistantTurn(result)).not.toThrow();
+    expect(result.meta.source).toBe('server_clock');
+    expect(result.answer).toMatch(/Данас је/);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(searchInCollection).not.toHaveBeenCalled();
+  });
+
   it('returns a keyword fallback with reason="ai_disabled_or_mock" when AI_PROVIDER=mock', async () => {
     process.env.AI_PROVIDER = 'mock';
     const { fetchFn, searchInCollection } = setupMocks();

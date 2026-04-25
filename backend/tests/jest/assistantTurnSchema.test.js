@@ -164,4 +164,11 @@ describe('makeFallbackAssistantTurn', () => {
     expect(() => validateAssistantTurn(turn)).not.toThrow();
     expect(turn.meta.reason).toBe('llm_down');
   });
+
+  it('uses non-database wording when reason is invalid_turn', () => {
+    const turn = makeFallbackAssistantTurn({ lang: 'sr', reason: 'invalid_turn' });
+    expect(() => validateAssistantTurn(turn)).not.toThrow();
+    expect(turn.answer).not.toMatch(/pretražim bazu/i);
+    expect(turn.meta.reason).toBe('invalid_turn');
+  });
 });

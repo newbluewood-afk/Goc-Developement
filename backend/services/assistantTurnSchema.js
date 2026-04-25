@@ -270,21 +270,48 @@ function makeFallbackAssistantTurn(opts) {
 
   let answer;
   let suggestions;
-  if (lang === 'en') {
-    answer = 'I cannot search right now. You can browse manually:';
+  const isEn = lang === 'en';
+
+  const budgetReason =
+    reason === 'BUDGET_EXCEEDED_USER' || reason === 'BUDGET_EXCEEDED_GLOBAL';
+
+  if (isEn) {
     suggestions = [
       { label: 'Accommodation', route: '/smestaj', type: 'navigate' },
       { label: 'News', route: '/vesti', type: 'navigate' },
       { label: 'Contact', route: '/kontakt', type: 'navigate' },
     ];
+    if (reason === 'invalid_turn') {
+      answer =
+        'The assistant response could not be shown. Please try again or open a page below.';
+    } else if (budgetReason) {
+      answer =
+        'The monthly AI limit has been reached. You can still browse the site using the links below.';
+    } else if (reason === 'budget_check_failed') {
+      answer =
+        'We could not verify the AI budget right now. You can still browse using the links below.';
+    } else {
+      answer = 'I cannot search right now. You can browse manually:';
+    }
   } else {
-    answer =
-      'Trenutno ne mogu da pretražim bazu. Možete ručno pregledati stranice:';
     suggestions = [
       { label: 'Smeštaj', route: '/smestaj', type: 'navigate' },
       { label: 'Vesti', route: '/vesti', type: 'navigate' },
       { label: 'Kontakt', route: '/kontakt', type: 'navigate' },
     ];
+    if (reason === 'invalid_turn') {
+      answer =
+        'Odgovor asistenta trenutno ne može da se prikaže. Pokušajte ponovo ili otvorite stranicu ispod.';
+    } else if (budgetReason) {
+      answer =
+        'Mesečni limit za AI je dostignut. I dalje možete da pregledate sajt preko veza ispod.';
+    } else if (reason === 'budget_check_failed') {
+      answer =
+        'Trenutno ne možemo da proverimo AI budžet. Možete ručno da pregledate stranice ispod.';
+    } else {
+      answer =
+        'Trenutno ne mogu da pretražim bazu. Možete ručno pregledati stranice:';
+    }
   }
 
   return makeAssistantTurn({
