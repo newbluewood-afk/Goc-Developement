@@ -1,5 +1,7 @@
 const { assertBudget, BudgetExceededError } = require('../services/aiBudgetService');
 const { makeFallbackAssistantTurn } = require('../services/assistantTurnSchema');
+const FAIL_OPEN_ON_BUDGET_CHECK_ERROR =
+  String(process.env.AI_BUDGET_FAIL_OPEN || 'false').toLowerCase() === 'true';
 
 function isTodaysDateQuestion(raw) {
   const c = String(raw || '').normalize('NFC').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
@@ -48,6 +50,10 @@ function budgetGate(feature) {
         feature === 'site_guide' &&
         isTodaysDateQuestion(req.body?.message)
       ) {
+        return next();
+      }
+      if (FAIL_OPEN_ON_BUDGET_CHECK_ERROR) {
+        console.error('[budgetGate] non-budget error, fail-open enabled:', err.message);
         return next();
       }
       // Fail-closed on any other error (e.g. DB unreachable).
